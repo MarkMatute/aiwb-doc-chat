@@ -83,9 +83,13 @@ async def root():
     return {"message": "Welcome to AIWB Chatbot API"}
 
 @app.post("/upload")
-async def upload_file(businessId: str = Form(...), file: UploadFile = File(...)):
+async def upload_file(
+    businessId: str = Form(...),
+    documentId: str = Form(...),
+    file: UploadFile = File(...)
+):
     """
-    Upload endpoint that accepts businessId and file
+    Upload endpoint that accepts businessId, documentId, and file
     Processes PDF files, extracts text, chunks it, and stores in vector database
     """
     try:
@@ -119,6 +123,7 @@ async def upload_file(businessId: str = Form(...), file: UploadFile = File(...))
         response = {
             "message": "PDF processed successfully",
             "businessId": businessId,
+            "document_id": documentId,
             "filename": file.filename,
             "content_type": file.content_type,
             "file_size": len(file_content),
@@ -141,7 +146,7 @@ async def upload_file(businessId: str = Form(...), file: UploadFile = File(...))
         if pinecone_service:
             try:
                 # Create text chunks
-                chunks = text_chunker.chunk_pdf_content(extracted_content, businessId)
+                chunks = text_chunker.chunk_pdf_content(extracted_content, businessId, documentId)
                 response["vector_storage"]["chunks_created"] = len(chunks)
                 
                 if chunks:
@@ -167,6 +172,51 @@ async def upload_file(businessId: str = Form(...), file: UploadFile = File(...))
         logger.error(f"Unexpected error processing file {file.filename}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.delete("/clear/{businessId}")
+async def clear_business_data(businessId: str):
+    """
+    Clear all vectors for a specific business ID from Pinecone
+    Useful for testing and development
+    """
+    try:
+        if not pinecone_service:
+            raise HTTPException(status_code=503, detail="Pinecone service not available")
+
+        logger.info(f"Clearing all data for businessId: {businessId}")
+        pinecone_service.index.delete(filter={"business_id": businessId})
+
+        return {
+            "message": f"Successfully cleared all data for businessId: {businessId}",
+            "businessId": businessId
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error clearing data for businessId {businessId}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.delete("/document/{documentId}")
+async def delete_document(documentId: str):
+    """
+    Delete all vectors for a specific document ID from Pinecone
+    """
+    try:
+        if not pinecone_service:
+            raise HTTPException(status_code=503, detail="Pinecone service not available")
+
+        logger.info(f"Deleting document with documentId: {documentId}")
+        pinecone_service.index.delete(filter={"document_id": documentId})
+
+        return {
+            "message": f"Successfully deleted document: {documentId}",
+            "documentId": documentId
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {documentId}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -177,7 +227,7 @@ async def health_check():
             pinecone_status = "healthy" if stats.get("success") else "error"
         except:
             pinecone_status = "error"
-    
+
     return {
         "status": "healthy",
         "services": {
