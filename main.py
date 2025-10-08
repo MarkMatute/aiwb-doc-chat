@@ -6,7 +6,7 @@ from services.text_chunker import TextChunker
 from services.pinecone_service import PineconeService
 import logging
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
@@ -33,14 +33,17 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
     businessId: str
+    chatId: Optional[str] = None
     max_chunks: Optional[int] = 5
 
 class QueryResponse(BaseModel):
     query: str
     businessId: str
+    chatId: Optional[str] = None
     answer: str
     sources: List[dict]
     chunks_used: int
+    isLead: bool
 
 # Initialize services
 pdf_processor = PDFProcessor()
@@ -49,6 +52,11 @@ text_chunker = TextChunker(chunk_size=1000, chunk_overlap=200)
 # Initialize Pinecone service (will be None if credentials not provided)
 pinecone_service: Optional[PineconeService] = None
 openai_client: Optional[OpenAI] = None
+
+# In-memory conversation cache: {chatId: [messages]}
+# NOTE: This is temporary storage. For production, use Redis or similar persistent cache.
+conversation_cache: Dict[str, List[dict]] = {}
+MAX_CONVERSATION_HISTORY = 10  # Limit to last 10 messages to prevent token overflow
 
 # Try to initialize Pinecone service
 try:
@@ -77,6 +85,67 @@ try:
         logger.warning("Pinecone credentials not found. Vector storage will be disabled.")
 except Exception as e:
     logger.error(f"Failed to initialize Pinecone service: {str(e)}")
+
+def detect_lead(user_message: str) -> bool:
+    """
+    Detect if a user message indicates a potential lead
+
+    Args:
+        user_message: The user's query message
+
+    Returns:
+        True if the message indicates a lead, False otherwise
+    """
+    if not openai_client:
+        logger.warning("OpenAI client not available for lead detection, defaulting to False")
+        return False
+
+    try:
+        lead_detection_prompt = f"""You are an assistant that classifies user messages as either a potential lead or not_lead. A lead means the user is expressing interest in a product, service, pricing, features, support, demo, or similar sales-related engagement.
+
+Instructions:
+
+You will be given a single user message.
+
+Return only one of the following labels:
+
+"lead" — if the message shows strong purchase intent, interest in the product/service, pricing inquiries, demo requests, support/help requests, etc.
+
+"not_lead" — if the message is irrelevant, casual conversation, spam, vague, or lacks clear buying interest.
+
+Examples:
+Message: "Hi, I'm interested in using your platform for my business." → lead
+Message: "How much does this cost per month?" → lead
+Message: "Can I book a demo for tomorrow?" → lead
+Message: "hello" → not_lead
+Message: "I'm just browsing." → not_lead
+Message: "Can you tell me about your refund policy?" → lead
+Message: "What's your uptime guarantee?" → lead
+Message: "What's up?" → not_lead
+
+Input:
+{user_message}
+
+Output (respond with only "lead" or "not_lead"):"""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": lead_detection_prompt}
+            ],
+            temperature=0,
+            max_tokens=10
+        )
+
+        result = response.choices[0].message.content.strip().lower()
+        is_lead = result == "lead"
+
+        logger.info(f"Lead detection for message '{user_message[:50]}...': {is_lead}")
+        return is_lead
+
+    except Exception as e:
+        logger.error(f"Error in lead detection: {str(e)}")
+        return False
 
 @app.get("/")
 async def root():
@@ -217,6 +286,27 @@ async def delete_document(documentId: str):
         logger.error(f"Error deleting document {documentId}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.delete("/chat/{chatId}")
+async def delete_chat(chatId: str):
+    """
+    Clear conversation history for a specific chat ID
+    """
+    try:
+        if chatId in conversation_cache:
+            del conversation_cache[chatId]
+            logger.info(f"Deleted conversation history for chatId: {chatId}")
+            return {
+                "message": f"Successfully deleted conversation history for chatId: {chatId}",
+                "chatId": chatId
+            }
+        else:
+            raise HTTPException(status_code=404, detail=f"Chat ID {chatId} not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting chat {chatId}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -269,10 +359,13 @@ async def query_documents(request: QueryRequest):
         logger.info(f"Found {len(similar_chunks)} similar chunks")
         
         if not similar_chunks:
+            # Detect lead even when no documents found
+            is_lead = detect_lead(request.query)
+
             # Try searching without business_id filter to see if there are any documents at all
             all_chunks = pinecone_service.search_similar_no_filter(request.query, request.max_chunks)
             logger.info(f"Total chunks in index (no filter): {len(all_chunks)}")
-            
+
             if all_chunks:
                 business_ids = [chunk.get('business_id', 'unknown') for chunk in all_chunks]
                 logger.info(f"Available business IDs: {set(business_ids)}")
@@ -281,7 +374,8 @@ async def query_documents(request: QueryRequest):
                     businessId=request.businessId,
                     answer=f"No documents found for business ID '{request.businessId}'. Available business IDs in the system: {list(set(business_ids))}",
                     sources=[],
-                    chunks_used=0
+                    chunks_used=0,
+                    isLead=is_lead
                 )
             else:
                 return QueryResponse(
@@ -289,7 +383,8 @@ async def query_documents(request: QueryRequest):
                     businessId=request.businessId,
                     answer="No documents have been uploaded to the system yet. Please upload documents first using the /upload endpoint.",
                     sources=[],
-                    chunks_used=0
+                    chunks_used=0,
+                    isLead=is_lead
                 )
         
         # Prepare context from retrieved chunks
@@ -333,32 +428,61 @@ async def query_documents(request: QueryRequest):
         
         user_prompt = f"""Context from documents:
         {context}
-        
+
         Question: {request.query}
-        
+
         Please provide a comprehensive answer based on the context above."""
-        
+
+        # Build messages array with conversation history if chatId is provided
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history if chatId exists
+        if request.chatId and request.chatId in conversation_cache:
+            # Get last N messages to prevent token overflow
+            history = conversation_cache[request.chatId][-MAX_CONVERSATION_HISTORY:]
+            messages.extend(history)
+            logger.info(f"Using conversation history for chatId {request.chatId}: {len(history)} messages")
+
+        # Add current user query
+        messages.append({"role": "user", "content": user_prompt})
+
         # Get response from GPT-4o-mini
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=1000
         )
-        
+
         answer = response.choices[0].message.content
-        
+
+        # Detect if user message is a lead
+        is_lead = detect_lead(request.query)
+
+        # Update conversation cache if chatId is provided
+        if request.chatId:
+            if request.chatId not in conversation_cache:
+                conversation_cache[request.chatId] = []
+
+            # Add user message and assistant response to cache
+            conversation_cache[request.chatId].append({"role": "user", "content": user_prompt})
+            conversation_cache[request.chatId].append({"role": "assistant", "content": answer})
+
+            # Keep only last MAX_CONVERSATION_HISTORY messages
+            conversation_cache[request.chatId] = conversation_cache[request.chatId][-MAX_CONVERSATION_HISTORY:]
+
+            logger.info(f"Updated conversation cache for chatId {request.chatId}")
+
         logger.info(f"Successfully processed query for business {request.businessId}")
-        
+
         return QueryResponse(
             query=request.query,
             businessId=request.businessId,
+            chatId=request.chatId,
             answer=answer,
             sources=sources,
-            chunks_used=len(similar_chunks)
+            chunks_used=len(similar_chunks),
+            isLead=is_lead
         )
         
     except HTTPException:
