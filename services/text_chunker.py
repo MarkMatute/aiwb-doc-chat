@@ -184,35 +184,37 @@ class TextChunker:
             metadata=chunk_metadata
         )
     
-    def chunk_pdf_content(self, extracted_content: Dict, business_id: str) -> List[TextChunk]:
+    def chunk_pdf_content(self, extracted_content: Dict, business_id: str, document_id: str) -> List[TextChunk]:
         """
         Chunk PDF content from the PDF processor output
-        
+
         Args:
             extracted_content: Output from PDFProcessor.extract_text_from_pdf
             business_id: Business ID for metadata
-            
+            document_id: Document ID for metadata (stored as document_id in vector)
+
         Returns:
             List of TextChunk objects
         """
         if not extracted_content.get("success", False):
             logger.warning(f"Cannot chunk failed PDF extraction: {extracted_content.get('error')}")
             return []
-        
+
         all_chunks = []
         filename = extracted_content.get("filename", "unknown")
-        
+
         # Process each page
         for page_data in extracted_content.get("pages", []):
             page_text = page_data.get("text", "")
             page_number = page_data.get("page_number", 1)
-            
+
             if not page_text.strip():
                 continue
-            
+
             # Create metadata for this page
             page_metadata = {
                 "business_id": business_id,
+                "document_id": document_id,
                 "filename": filename,
                 "total_pages": extracted_content.get("total_pages", 0),
                 "page_width": page_data.get("width", 0),

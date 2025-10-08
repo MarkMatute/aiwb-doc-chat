@@ -116,6 +116,7 @@ class PineconeService:
                 pinecone_metadata = {
                     "text": text_for_metadata,
                     "business_id": chunk.metadata["business_id"],
+                    "document_id": chunk.metadata["document_id"],
                     "filename": chunk.metadata["filename"],
                     "page_number": chunk.page_number,
                     "chunk_index": chunk.chunk_index,
