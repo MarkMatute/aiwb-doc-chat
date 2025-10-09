@@ -14,11 +14,21 @@ class ChatService {
   private connectionListeners: ((isConnected: boolean) => void)[] = [];
   private ws: WebSocket | null = null;
   private clientId: string | null = null;
+  private connectPromise: Promise<ConversationData> | null = null;
 
   connect(customerId: string): Promise<ConversationData> {
-    return new Promise((resolve, reject) => {
+    // if a connect is already in-flight or completed, return that promise
+    if (this.connectPromise) return this.connectPromise;
+
+    this.connectPromise = new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket('ws://localhost:3001');
+        // if ws already exists and open, avoid creating a new one
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          // wait for 'connection' message to have been processed by the existing flow
+          // but we don't have the conversation object stored, so resolve once a new 'connection' arrives
+        } else {
+          this.ws = new WebSocket('ws://localhost:3001');
+        }
 
         this.ws.onopen = () => {
           this.notifyConnectionChange(true);
@@ -113,17 +123,22 @@ class ChatService {
 
         this.ws.onclose = () => {
           this.ws = null;
+          this.connectPromise = null;
           this.notifyConnectionChange(false);
           // do not auto-reconnect here; caller can decide
         };
 
         this.ws.onerror = (err) => {
           console.error('WebSocket error', err);
+          this.connectPromise = null;
         };
       } catch (err) {
+        this.connectPromise = null;
         reject(err);
       }
     });
+
+    return this.connectPromise;
   }
 
   disconnect(): void {
