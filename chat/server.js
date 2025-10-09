@@ -101,11 +101,11 @@ function handleChatMessage(clientId, message) {
     messageHistory = messageHistory.slice(-100);
   }
 
-  // Broadcast to all clients
+  // Broadcast to all clients except sender
   broadcast({
     type: 'message',
     ...chatMessage
-  });
+  }, clientId);
 }
 
 // Handle username changes
@@ -143,6 +143,11 @@ app.get('/api/users', (req, res) => {
     username: client.username
   }));
   res.json(users);
+});
+
+// simple health endpoint for runtime checks
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', port: PORT, clients: clients.size });
 });
 
 // Serve React app for all other routes
