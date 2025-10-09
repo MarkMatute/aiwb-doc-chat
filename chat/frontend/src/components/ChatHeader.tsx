@@ -16,7 +16,7 @@ export default function ChatHeader({ customerInfo }: ChatHeaderProps) {
             Seamless handoff from AI assistant
           </p>
         </div>
-        {customerInfo && (
+        {customerInfo && typeof customerInfo.leadScore === 'number' && (
           <div className="text-right">
             <div className="text-xs text-gray-500">Lead Score</div>
             <div className="text-lg font-bold text-blue-600">{customerInfo.leadScore}%</div>

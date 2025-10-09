@@ -12,7 +12,7 @@ export interface CustomerInfo {
   email: string;
   company?: string;
   isLead: boolean;
-  leadScore: number;
+  leadScore?: number;
   conversationStartTime: Date;
   lastActiveTime: Date;
 }

@@ -46,11 +46,10 @@ class ChatService {
                   messages,
                   customerInfo: {
                     id: customerId,
-                    name: 'Guest',
+                    name: data.username || 'Customer',
                     email: '',
                     company: '',
                     isLead: false,
-                    leadScore: 0,
                     conversationStartTime: new Date(),
                     lastActiveTime: new Date()
                   } as CustomerInfo
