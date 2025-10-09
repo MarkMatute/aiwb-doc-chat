@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // Serve static files from React build
-app.use(express.static(path.join(__dirname, 'client/build')));
+app.use(express.static(path.join(__dirname, 'frontend/dist')));
 
 // Create HTTP server
 const server = require('http').createServer(app);
@@ -147,7 +147,7 @@ app.get('/api/users', (req, res) => {
 
 // Serve React app for all other routes
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
+  res.sendFile(path.join(__dirname, 'frontend/dist', 'index.html'));
 });
 
 // Start server

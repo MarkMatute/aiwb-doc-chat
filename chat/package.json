@@ -5,10 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "dev": "concurrently \"npm run server\" \"npm run frontend\"",
     "server": "nodemon server.js",
-    "client": "cd client && npm start",
-    "build": "cd client && npm run build"
+    "frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build"
   },
   "dependencies": {
     "ws": "^8.14.2",
