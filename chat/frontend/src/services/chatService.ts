@@ -13,7 +13,7 @@ class ChatService {
           messages: [],
           customerInfo: {
             id: customerId,
-            name: 'Unknown Customer',
+            name: 'Guest',
             email: '',
             company: '',
             isLead: false,
